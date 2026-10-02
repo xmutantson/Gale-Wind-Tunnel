@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from tools.validate_package import ASSEMBLY, PROJECT, STEP, check_step, main, validate
 
@@ -110,6 +111,31 @@ class PackageTests(unittest.TestCase):
         validate(self.root)
         after = {p.name: p.read_bytes() for p in self.root.iterdir()}
         self.assertEqual(before, after)
+
+    def test_inventory_permission_error_is_structured(self):
+        for json_output in (False, True):
+            with self.subTest(json=json_output):
+                stream = io.StringIO()
+                with patch.object(Path, "iterdir", side_effect=PermissionError("listing denied")), contextlib.redirect_stdout(stream):
+                    status = main(["--root", str(self.root)] + (["--json"] if json_output else []))
+                self.assertEqual(status, 1)
+                if json_output:
+                    report = json.loads(stream.getvalue())
+                    self.assertEqual(report["errors"], [{"code": "inventory_unreadable", "path": ".", "message": "listing denied"}])
+                    self.assertEqual(report["manifest"]["listed_files"], 2)
+                    self.assertEqual(report["step"]["entities"], 2)
+                    self.assertEqual(len(report["assets"]), 3)  # known required assets still checked
+                else:
+                    self.assertIn("ERROR [inventory_unreadable] .: listing denied", stream.getvalue())
+
+    def test_inventory_iteration_failure_is_structured(self):
+        def partial_entries(path):
+            yield path / "Top.ipt"
+            raise OSError("listing interrupted")
+        with patch.object(Path, "iterdir", partial_entries):
+            report = validate(self.root)
+        self.assertEqual(self.codes(report), {"inventory_unreadable"})
+        self.assertEqual(report["errors"][0]["message"], "listing interrupted")
 
     def test_missing_root_fails(self):
         self.assertIn("package_missing", self.codes(validate(self.root / "absent")))

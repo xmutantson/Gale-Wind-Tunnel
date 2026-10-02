@@ -102,6 +102,14 @@ def validate(root):
         issue("errors", "package_missing", ".", "Package directory does not exist")
         return report
 
+    # Materialize once: directory iteration can fail either when started or
+    # partway through consumption. Keep that failure in the structured report.
+    try:
+        entries = list(root.iterdir())
+    except OSError as exc:
+        entries = []
+        issue("errors", "inventory_unreadable", ".", str(exc))
+
     try:
         log = load("packngo.log")
         declared = re.search(r"^Number of Files Copied:\s*(\d+)\s*$", log, re.MULTILINE)
@@ -123,7 +131,7 @@ def validate(root):
             if not local_file(name).is_file():
                 issue("errors", "native_missing", name, "Native file listed in packngo.log is absent")
         expected = {name.casefold() for name in names}
-        for path in sorted(root.iterdir()):
+        for path in sorted(entries):
             if path.suffix.lower() in NATIVE_SUFFIXES and path.name.casefold() not in expected:
                 issue("warnings", "native_unlisted", path.name, "Native file is not listed in the historical manifest; review package inventory")
     except (OSError, UnicodeError, ValueError) as exc:
@@ -156,7 +164,7 @@ def validate(root):
         issue("errors", "step_unreadable", STEP, str(exc))
 
     required = {PROJECT, ASSEMBLY, STEP}
-    candidates = {path.name for path in root.iterdir() if path.suffix.lower() in NATIVE_SUFFIXES}
+    candidates = {path.name for path in entries if path.suffix.lower() in NATIVE_SUFFIXES}
     for name in sorted(candidates | required):
         try:
             data = local_file(name).read_bytes()
